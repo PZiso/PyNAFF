@@ -208,7 +208,7 @@ def naff(data, turns=300, nterms=1, skipTurns=0, getFullSpectrum=False, window=1
 			ZDIV = ZDIV + np.conj(vars['ZALP'][NF-1, i])*ZTEE[i]
 		DIV = np.sqrt(np.abs(ZDIV))
 		vars['ZALP'][NF-1,:] = vars['ZALP'][NF-1,:]/DIV
-		ZMUL = np.complex(A,B)/DIV
+		ZMUL = complex(A,B)/DIV
 		ZI = 0.0+1.0j
 
 		for i in range(0, NF):
