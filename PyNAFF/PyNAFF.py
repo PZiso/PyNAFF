@@ -6,16 +6,16 @@ except ImportError:
 import numpy as np
 """
 # NAFF - Numerical Analysis of Fundamental Frequencies
-# Version : 1.1.4
+# Version : 1.1.5
 # Authors : F. Asvesta, N. Karastathis, P.Zisopoulos
-# Contact : nkarast .at. cern .dot. ch
+# Contacts : pzisopou@cern.ch, foteini.asvesta@cern.ch
 #
 """
 
 __version   = '1.1.4'
-__PyVersion = [2.7, 3.6]
+__PyVersion = [3.10]
 __authors   = ['F. Asvesta','N. Karastathis', 'P. Zisopoulos']
-__contact   = ['nkarast .at. cern .dot. ch']
+__contact   = ['pzisopou@cern.ch', 'foteini.asvesta@cern.ch']
 
 
 def naff(data, turns=300, nterms=1, skipTurns=0, getFullSpectrum=False, window=1):
