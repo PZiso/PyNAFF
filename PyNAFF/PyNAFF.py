@@ -19,7 +19,7 @@ __authors   = ['F. Asvesta','N. Karastathis', 'P. Zisopoulos']
 __contact   = ['nkarast .at. cern .dot. ch']
 
 
-def naff(data, turns=300, nterms=1, skipTurns=0, getFullSpectrum=False, window=1):
+def naff(data, turns=300, nterms=1, skipTurns=0, getFullSpectrum=False, window=1, warnings=False):
 	'''
 	The driving function for the NAFF algorithm.
 	Inputs :
@@ -246,7 +246,7 @@ def naff(data, turns=300, nterms=1, skipTurns=0, getFullSpectrum=False, window=1
 		INDX = np.argmax(RTAB)
 		VMAX = np.max(RTAB)
 
-		if INDX == 0 :
+		if INDX == 0 and warnings :
 			print('## PyNAFF::naff: Remove the DC component from the data (i.e. the mean).')
 		if INDX <= turns/2.0:
 			IFR = INDX - 1
