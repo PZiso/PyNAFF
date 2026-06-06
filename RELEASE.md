@@ -38,6 +38,6 @@ git tag -a v1.2.0 -m "PyNAFF 1.2.0"
 git push origin v1.2.0
 ```
 
-Create a GitHub release from `v1.2.0`. Publishing that release triggers
-`.github/workflows/publish.yml`, which builds and uploads to PyPI using Trusted
-Publishing.
+After a PyPI owner configures Trusted Publishing, run the
+`Publish to PyPI with Trusted Publishing` workflow manually. Create the GitHub
+release only after the PyPI upload succeeds.
