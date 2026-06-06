@@ -1,281 +1,445 @@
-from __future__ import absolute_import, division, print_function, unicode_literals
-try:
-	from builtins import range, int
-except ImportError:
-	from __builtin__ import range, int
+"""Numerical Analysis of Fundamental Frequencies (NAFF)."""
+
+from math import lgamma, log
+import warnings as warnings_module
+
 import numpy as np
-"""
-# NAFF - Numerical Analysis of Fundamental Frequencies
-# Version : 1.1.4
-# Authors : F. Asvesta, N. Karastathis, P.Zisopoulos
-# Contact : nkarast .at. cern .dot. ch
-#
-"""
 
-__version   = '1.1.4'
-__PyVersion = [2.7, 3.6]
-__authors   = ['F. Asvesta','N. Karastathis', 'P. Zisopoulos']
-__contact   = ['nkarast .at. cern .dot. ch']
+from ._version import __version__
+
+__PyVersion = [3]
+__authors__ = ["F. Asvesta", "N. Karastathis", "P. Zisopoulos"]
+__contact__ = ["nkarast .at. cern .dot. ch"]
+__all__ = ["naff"]
 
 
-def naff(data, turns=300, nterms=1, skipTurns=0, getFullSpectrum=False, window=1):
-	'''
-	The driving function for the NAFF algorithm.
-	Inputs :
-	*  data : NumPy array with TbT data
-	*  turns : number of points to consider from the input data
-	*  nterms : maximum number of harmonics to search for in the data sample
-	*  skipTurns : number of observations (data points) to skip from the start of the input iterable
-	*  getFullSpectrum : [True | False]
-					  If True, a normal FFT is used (both negative and positive frequencies)
-					  If False, an rFFT is used (only positive frequencies)
-	*  window : the order of window to be applied on the input data (default =1)
-	Returns : Array with frequencies and amplitudes in the format:
-		  [order of harmonic, frequency, Amplitude, Re{Amplitude}, Im{Amplitude}]
-	'''
-	if turns >= len(data)+1:
-		raise ValueError('#naff : Input data must be at least of length turns+1.')
-	if turns < 6:
-		raise ValueError('#naff : Minimum number of turns is 6.')
-
-	if np.mod(turns,6)!=0:
-		a,b=divmod(turns,6)
-		turns = int(6*a)
-
-	NFR  = 100
-	vars = {
-	'NFS' 		: 0,
-	'TFS' 		: np.zeros(NFR).astype('float64'),
-	'ZAMP' 		: np.zeros(NFR).astype('complex128'),
-	'ZALP'	 	: np.zeros((NFR,NFR)).astype('complex128'),
-	'ZTABS' 	: np.array([]).astype('complex128'),
-	'TWIN'  	: np.array([]).astype('float64'),
-	}
-	# - - * - - * - - * - - * - - * - - * - - * - - * - - * - - * - - * - - * - - * - - * - - * - -
-	def getIntegral(FR, turns):
-		'''
-		Calculate the integral using Hardy's method'
-		'''
-		if np.mod(turns, 6)!= 0:
-			raise ValueError("Turns need to be *6")
-		K = int(turns/6)
-
-		i_line = np.linspace(1, turns, num=turns, endpoint=True)
-		ZTF_tmp = vars['ZTABS'][1:]*vars['TWIN'][1:]*np.exp(-2.0*(i_line)*np.pi*1.0j*FR)
-		ZTF = np.array(vars['ZTABS'][0]*vars['TWIN'][0])
-		ZTF = np.append(ZTF, ZTF_tmp).ravel()
-		N = turns + 1
-		ZOM = 41.*ZTF[0]+216.*ZTF[1]+27.*ZTF[2]+272.*ZTF[3]+27.*ZTF[4]+216.*ZTF[5]+41.*ZTF[int(N)-1]
-		for I in range(1, K):
-			ZOM=ZOM+82.0*ZTF[6*I+1-1]+216.0*ZTF[6*I+2-1]+27.0*ZTF[6*I+3-1]+272.0*ZTF[6*I+4-1]+27.0*ZTF[6*I+5-1]+216.0*ZTF[6*I+6-1]
-		ZOM=ZOM*(1.0/turns)*(6.0/840.0)
-		A = np.real(ZOM)
-		B = np.imag(ZOM)
-		RMD = np.abs(ZOM)
-		return RMD, A, B
-	# - - * - - * - - * - - * - - * - - * - - * - - * - - * - - * - - * - - * - - * - - * - - * - -
-	def frefin(turns, FR, STAREP, EPS):
-		'''
-		Try to refine the frequency found using slopes & root finding methods
-		'''
-		EPSI = 1.0e-15
-		X2  = FR
-		PAS = STAREP
-		Y2, A2, B2  = getIntegral(X2, turns)
-		X1  = X2 - PAS
-		X3  = X2 + PAS
-		Y1, A1, B1  = getIntegral(X1, turns)
-		Y3, A3, B3  = getIntegral(X3, turns)
-		while True:
-			if PAS >=EPS:
-				if np.abs(Y3-Y1) < EPSI:
-					break
-				if (Y1<Y2) and (Y3<Y2):
-					R2  = (Y1-Y2)/(X1-X2)
-					R3  = (Y1-Y3)/(X1-X3)
-					A   = (R2 - R3)/(X2-X3)
-					B   = R2 - A*(X1+X2)
-					XX2 = -B/(2.0*A)
-					PAS = np.abs(XX2-X2)
-					if XX2 > X2:
-						X1 = X2
-						Y1, A1, B1 = Y2, A2, B2
-						X2 = XX2
-						Y2, A2, B2 = getIntegral(X2, turns)
-						X3 = X2 + PAS
-						Y3, A3, B3 = getIntegral(X3, turns)
-					else:
-						X3 = X2
-						Y3, A3, B3 = Y2, A2, B2
-						X2 = XX2
-						Y2, A2, B2 = getIntegral(X2, turns)
-						X1 = X2 - PAS
-						Y1, A1, B1 = getIntegral(X1, turns)
-				else:
-					if Y1>Y3:
-						X2 = X1
-						Y2, A2, B2 = Y1, A1, B1
-					else:
-						X2 = X3
-						Y2, A2, B2 = Y3, A3, B3
-
-					X1 = X2 - PAS
-					X3 = X2 + PAS
-					Y1, A1, B1 = getIntegral(X1, turns)
-					Y3, A2, B2 = getIntegral(X3, turns)
-					if (Y3-Y1)-(Y3-Y2)==0.0:
-						PAS=PAS+EPS
-
-			else:
-				break
-		return X2, Y2, A2, B2
-	# - - * - - * - - * - - * - - * - - * - - * - - * - - * - - * - - * - - * - - * - - * - - * - -
-	def fretes(FR, FREFON):
-		'''
-		If more than one term found, check how different they are
-		'''
-		TOL   = 1.0e-4 # this is defined in mftnaf in lashkar
-		IFLAG = 1
-		NUMFR = 0
-		ECART = np.abs(FREFON)
-		for i in range(len(vars['TFS'])):
-			TEST = np.abs(vars['TFS'][i] - FR)
-			if TEST < ECART:
-				if np.float(TEST)/np.float(ECART) < TOL:
-					IFLAG = -1
-					NUMFR = i
-					break
-				else:
-					IFLAG = 0
-					continue
-		return IFLAG, NUMFR
-	# - - * - - * - - * - - * - - * - - * - - * - - * - - * - - * - - * - - * - - * - - * - - * - -
-	def modfre(turns, FR, NUMFR, A, B):
-		'''
-		If I found something very close to one of the FR before, I assume that this comes from data
-		I had not removed successfully => Remove them without orthonormalization
-		'''
-		ZI  = 0. + 1.0j
-		ZOM = 1.0j*FR
-		ZA  = 1.0*A + 1.0j*B
-		if len(vars['ZAMP'])<= NUMFR:
-			vars['ZAMP'][NUMFR] = 0
-		vars['ZAMP'][NUMFR] = vars['ZAMP'][NUMFR] + ZA
-		i_line = np.linspace(1, turns, num=turns, endpoint=True)
-		ZT_tmp = ZA*np.exp(2.0*(i_line)*np.pi*ZOM)
-		ZT     = np.array([ZA])
-		ZT     = np.append(ZT, ZT_tmp).ravel()
-		ZTABS_tmp = vars['ZTABS'] - ZT
-		vars['ZTABS'] = ZTABS_tmp
-	# - - * - - * - - * - - * - - * - - * - - * - - * - - * - - * - - * - - * - - * - - * - - * - -
-	def proscaa(turns, FS, FS_OLD):
-		ZI = 0.0+1.0j
-		OM = FS-FS_OLD
-		ANGI = 2.0*np.pi*OM
-		i_line = np.linspace(1, turns, num=turns, endpoint=True)
-		ZT_tmp = np.exp(-2.0*(i_line)*1.0j*np.pi*OM)
-		ZT_zero = np.array([1])
-		ZT = np.append(ZT_zero, ZT_tmp).ravel()
-		ZTF = np.multiply(vars['TWIN'],ZT)
-		N = turns + 1
-		ZOM = 41.*ZTF[0]+216.*ZTF[1]+27.*ZTF[2]+272.*ZTF[3]+27.*ZTF[4]+216.*ZTF[5]+41.*ZTF[int(N)-1]
-		for I in range(1, int(turns/6)):
-			ZOM=ZOM+82.0*ZTF[6*I+1-1]+216.0*ZTF[6*I+2-1]+27.0*ZTF[6*I+3-1]+272.0*ZTF[6*I+4-1]+27.0*ZTF[6*I+5-1]+216.0*ZTF[6*I+6-1]
-
-		ZOM=ZOM*(1.0/turns)*(6.0/840.0)
-		return ZOM
-	# - - * - - * - - * - - * - - * - - * - - * - - * - - * - - * - - * - - * - - * - - * - - * - -
-	def gramsc(turns, FR, A, B):
-		'''
-		Remove the contribution of the frequency found from the Data and orthonormalize
-		'''
-
-		ZTEE = np.zeros(vars['NFS']+1).astype('complex128')
-		for i in range(0, vars['NFS']):
-			ZTEE[i] = proscaa(turns, FR, vars['TFS'][i])
-		NF = vars['NFS']+1
-		ZTEE[NF-1] = 1.0+0.0j
-		vars['TFS'][NF-1] = FR
-		for k in range(1,vars['NFS']+1):
-			for i in range(1, vars['NFS']+1):
-				for j in range(1,i+1):
-					vars['ZALP'][NF-1, k-1] = vars['ZALP'][NF-1, k-1] - np.conj(vars['ZALP'][i-1,j-1])*vars['ZALP'][i-1,k-1]*ZTEE[j-1]
-
-		vars['ZALP'][NF-1, NF-1] = 1.0+0.0j
-		DIV  = 1.0
-		ZDIV = 0.0+0.0j
-		for i in range(0, NF):
-			ZDIV = ZDIV + np.conj(vars['ZALP'][NF-1, i])*ZTEE[i]
-		DIV = np.sqrt(np.abs(ZDIV))
-		vars['ZALP'][NF-1,:] = vars['ZALP'][NF-1,:]/DIV
-		ZMUL = np.complex(A,B)/DIV
-		ZI = 0.0+1.0j
-
-		for i in range(0, NF):
-			ZOM = 1.0j*vars['TFS'][i]
-			ZA  = vars['ZALP'][NF-1,i]*ZMUL
-			vars['ZAMP'][i] = vars['ZAMP'][i]+ZA
-			ZT_zero = np.array([ZA])
-			i_line = np.linspace(1, turns, num=turns, endpoint=True)
-			ZT_tmp = ZA*np.exp(2.0*(i_line)*1.0j*np.pi*vars['TFS'][i])
-			ZT = np.append(ZT_zero, ZT_tmp).ravel()
-			vars['ZTABS'] = vars['ZTABS'] - ZT
+def _hardy_weights(turns):
+    """Return the composite Hardy quadrature weights used by NAFF."""
+    weights = np.empty(turns + 1, dtype=np.float64)
+    weights[0] = 41.0
+    weights[-1] = 41.0
+    pattern = np.array([216.0, 27.0, 272.0, 27.0, 216.0, 82.0])
+    weights[1:-1] = np.resize(pattern, turns - 1)
+    weights *= 6.0 / (840.0 * turns)
+    return weights
 
 
-	# - - * - - * - - * - - * - - * - - * - - * - - * - - * - - * - - * - - * - - * - - * - - * - -
-	FREFON = 1.0/turns
-	NEPS   = 100000000
-	EPS    = FREFON/NEPS
-
-	T    = np.linspace(0, turns, num=turns+1, endpoint=True)*2.0*np.pi - np.pi*turns
-	vars['TWIN'] = 1.0+np.cos(T/turns)
-	vars['TWIN'] = ((2.0**window*np.math.factorial(window)**2)/float(np.math.factorial(2*window)))*(1.0+np.cos(T/turns))**window
-	vars['ZTABS'] = data[skipTurns:skipTurns+turns+1]
-
-	TOL = 1.0e-4
-	STAREP = FREFON/3.0
-	for term in range(nterms):
-		data_for_fft = np.multiply(vars['ZTABS'], vars['TWIN'])[:-1] # .astype('complex128')
-		if getFullSpectrum:
-			y = np.fft.fft(data_for_fft)
-		else:
-			y = np.fft.rfft(data_for_fft.astype('float64'))
-
-		RTAB = np.sqrt(np.real(y)**2 + np.imag(y)**2)/turns  # normalized
-		INDX = np.argmax(RTAB)
-		VMAX = np.max(RTAB)
-
-		if INDX == 0 :
-			print('## PyNAFF::naff: Remove the DC component from the data (i.e. the mean).')
-		if INDX <= turns/2.0:
-			IFR = INDX - 1
-		else:
-			IFR = INDX-1-turns
-
-		FR = (IFR+1)*FREFON
-		FR, RMD, A, B = frefin(turns, FR, STAREP, EPS)
-		IFLAG, NUMFR = fretes(FR, FREFON)
-		if IFLAG ==1:
-			gramsc(turns, FR, A, B)
-			vars['NFS'] = vars['NFS'] + 1
-		elif IFLAG == 0:
-			# continue
-			break  # if I put continue it will find again and again the same freq/ with break it stops repeating
-		elif IFLAG == -1:
-			modfre(turns, FR, NUMFR, A, B)
-
-	result = []
-	for i in range(vars['NFS']):
-		AMP = np.abs(vars['ZAMP'][i])
-		result.append(np.array([int(i), vars['TFS'][i], AMP, np.real(vars['ZAMP'][i]), np.imag(vars['ZAMP'][i])]))
-	return np.array(result)
+def _prepare_context(turns, window):
+    samples = np.arange(turns + 1, dtype=np.float64)
+    centered_time = 2.0 * np.pi * samples - np.pi * turns
+    scale = np.exp(
+        window * log(2.0)
+        + 2.0 * lgamma(window + 1)
+        - lgamma(2 * window + 1)
+    )
+    taper = scale * (1.0 + np.cos(centered_time / turns)) ** window
+    return samples, taper, _hardy_weights(turns)
 
 
-### - - - ### - - - ### - - - ### - - - ### - - - ### - - - ### - - - ### - - - ### - - - ### - - - ###
+def _integral(signal, frequency, samples, integration_weights):
+    phase = np.exp(-2.0j * np.pi * frequency * samples)
+    value = np.dot(signal * integration_weights, phase)
+    return abs(value), value.real, value.imag
 
-# Example
-if __name__ == '__main__':
-	x = np.linspace(1, 500, num=500, endpoint=True)
-	data = np.sin(2.0*np.pi*0.34*x)+np.sin(2.0*np.pi*0.36*x)
-	a = naff(data, 300, 20, 0, False)
-	print(a)
+
+def _refine_frequency(
+    signal,
+    frequency,
+    step,
+    tolerance,
+    samples,
+    integration_weights,
+):
+    """Maximize the norm of the NAFF scalar product near an FFT bin."""
+    epsilon = 1.0e-15
+    x2 = frequency
+    y2, a2, b2 = _integral(signal, x2, samples, integration_weights)
+    x1 = x2 - step
+    x3 = x2 + step
+    y1, a1, b1 = _integral(signal, x1, samples, integration_weights)
+    y3, a3, b3 = _integral(signal, x3, samples, integration_weights)
+
+    for _ in range(1000):
+        if step < tolerance or abs(y3 - y1) < epsilon:
+            break
+
+        if y1 < y2 and y3 < y2:
+            slope2 = (y1 - y2) / (x1 - x2)
+            slope3 = (y1 - y3) / (x1 - x3)
+            parabola = (slope2 - slope3) / (x2 - x3)
+            if parabola == 0.0:
+                break
+            linear = slope2 - parabola * (x1 + x2)
+            candidate = -linear / (2.0 * parabola)
+            new_step = abs(candidate - x2)
+
+            if candidate > x2:
+                x1, y1, a1, b1 = x2, y2, a2, b2
+                x2 = candidate
+                y2, a2, b2 = _integral(
+                    signal, x2, samples, integration_weights
+                )
+                x3 = x2 + new_step
+                y3, a3, b3 = _integral(
+                    signal, x3, samples, integration_weights
+                )
+            else:
+                x3, y3, a3, b3 = x2, y2, a2, b2
+                x2 = candidate
+                y2, a2, b2 = _integral(
+                    signal, x2, samples, integration_weights
+                )
+                x1 = x2 - new_step
+                y1, a1, b1 = _integral(
+                    signal, x1, samples, integration_weights
+                )
+            step = new_step
+        else:
+            if y1 > y3:
+                x2, y2, a2, b2 = x1, y1, a1, b1
+            else:
+                x2, y2, a2, b2 = x3, y3, a3, b3
+
+            x1 = x2 - step
+            x3 = x2 + step
+            y1, a1, b1 = _integral(
+                signal, x1, samples, integration_weights
+            )
+            y3, a3, b3 = _integral(
+                signal, x3, samples, integration_weights
+            )
+
+    return x2, y2, a2, b2
+
+
+def _frequency_status(
+    frequency,
+    frequencies,
+    fundamental_resolution,
+    tolerance,
+):
+    if not frequencies:
+        return 1, 0
+
+    distances = np.abs(np.asarray(frequencies) - frequency)
+    nearby = np.flatnonzero(distances < abs(fundamental_resolution))
+    if nearby.size == 0:
+        return 1, 0
+
+    duplicate = nearby[
+        distances[nearby] / abs(fundamental_resolution) < tolerance
+    ]
+    if duplicate.size:
+        return -1, int(duplicate[0])
+    return 0, 0
+
+
+def _basis_overlap(
+    frequency,
+    old_frequency,
+    samples,
+    integration_weights,
+):
+    phase = np.exp(
+        -2.0j * np.pi * (frequency - old_frequency) * samples
+    )
+    return np.dot(integration_weights, phase)
+
+
+def _remove_component(
+    residual,
+    contribution,
+    frequency,
+    samples,
+    real_spectrum,
+):
+    component = contribution * np.exp(
+        2.0j * np.pi * frequency * samples
+    )
+    is_unpaired_bin = np.isclose(frequency, 0.0) or np.isclose(
+        abs(frequency), 0.5
+    )
+    if real_spectrum and not is_unpaired_bin:
+        residual -= 2.0 * component.real
+    elif real_spectrum:
+        residual -= component.real
+    else:
+        residual -= component
+
+
+def _add_frequency(
+    residual,
+    frequency,
+    integral,
+    frequencies,
+    amplitudes,
+    coefficients,
+    samples,
+    integration_weights,
+    real_spectrum,
+):
+    """Orthonormalize a new exponential and subtract its projection."""
+    old_count = len(frequencies)
+    overlaps = np.ones(old_count + 1, dtype=np.complex128)
+    for index, old_frequency in enumerate(frequencies):
+        overlaps[index] = _basis_overlap(
+            frequency,
+            old_frequency,
+            samples,
+            integration_weights,
+        )
+
+    row = np.zeros(old_count + 1, dtype=np.complex128)
+    for k in range(old_count):
+        for i in range(old_count):
+            row[k] -= (
+                np.dot(
+                    np.conj(coefficients[i, : i + 1]),
+                    overlaps[: i + 1],
+                )
+                * coefficients[i, k]
+            )
+    row[old_count] = 1.0
+
+    divisor = np.sqrt(abs(np.dot(np.conj(row), overlaps)))
+    if divisor == 0.0:
+        return False
+    row /= divisor
+
+    frequencies.append(frequency)
+    coefficients[old_count, : old_count + 1] = row
+    multiplier = integral / divisor
+
+    for index, old_frequency in enumerate(frequencies):
+        contribution = row[index] * multiplier
+        amplitudes[index] += contribution
+        _remove_component(
+            residual,
+            contribution,
+            old_frequency,
+            samples,
+            real_spectrum,
+        )
+    return True
+
+
+def _naff_1d(
+    data,
+    turns,
+    nterms,
+    skip_turns,
+    get_full_spectrum,
+    samples,
+    taper,
+    quadrature_weights,
+    tolerance,
+    show_warnings,
+):
+    residual = np.asarray(
+        data[skip_turns : skip_turns + turns + 1],
+        dtype=np.complex128,
+    ).copy()
+    integration_weights = taper * quadrature_weights
+    frequencies = []
+    amplitudes = np.zeros(nterms, dtype=np.complex128)
+    coefficients = np.zeros((nterms, nterms), dtype=np.complex128)
+    resolution = 1.0 / turns
+    real_spectrum = not get_full_spectrum
+
+    dc_warned = False
+    for _ in range(nterms):
+        fft_input = residual[:-1] * taper[:-1]
+        if get_full_spectrum:
+            spectrum = np.fft.fft(fft_input)
+            frequency = np.fft.fftfreq(turns)[
+                int(np.argmax(np.abs(spectrum)))
+            ]
+        else:
+            spectrum = np.fft.rfft(fft_input.real)
+            frequency = np.fft.rfftfreq(turns)[
+                int(np.argmax(np.abs(spectrum)))
+            ]
+
+        if frequency == 0.0 and show_warnings and not dc_warned:
+            warnings_module.warn(
+                "PyNAFF found a DC component; subtract the signal mean "
+                "before analysis if DC is not of interest.",
+                UserWarning,
+                stacklevel=3,
+            )
+            dc_warned = True
+
+        frequency, _, real, imaginary = _refine_frequency(
+            residual,
+            frequency,
+            resolution / 3.0,
+            resolution / 1.0e8,
+            samples,
+            integration_weights,
+        )
+        status, existing_index = _frequency_status(
+            frequency, frequencies, resolution, tolerance
+        )
+
+        if status == 0:
+            if show_warnings:
+                warnings_module.warn(
+                    "PyNAFF stopped because a residual peak is within one "
+                    "FFT bin of an extracted frequency but outside tol. "
+                    "A larger tol may continue extraction, but can also "
+                    "accept leakage artifacts.",
+                    UserWarning,
+                    stacklevel=3,
+                )
+            break
+        if status == -1:
+            contribution = complex(real, imaginary)
+            amplitudes[existing_index] += contribution
+            _remove_component(
+                residual,
+                contribution,
+                frequency,
+                samples,
+                real_spectrum,
+            )
+            continue
+
+        if not _add_frequency(
+            residual,
+            frequency,
+            complex(real, imaginary),
+            frequencies,
+            amplitudes,
+            coefficients,
+            samples,
+            integration_weights,
+            real_spectrum,
+        ):
+            break
+
+    result = np.empty((len(frequencies), 5), dtype=np.float64)
+    for order, frequency in enumerate(frequencies):
+        amplitude = amplitudes[order]
+        result[order] = (
+            order,
+            frequency,
+            abs(amplitude),
+            amplitude.real,
+            amplitude.imag,
+        )
+    return result
+
+
+def naff(
+    data,
+    turns=300,
+    nterms=1,
+    skipTurns=0,
+    getFullSpectrum=False,
+    window=1,
+    tol=1.0e-4,
+    warnings=True,
+):
+    """Extract the fundamental frequencies of one or more BPM signals.
+
+    A single signal has shape ``(observations,)``. Multiple BPM signals
+    have shape ``(observations, bpms)``.
+
+    The scalar result has shape ``(found_terms, 5)``. The multi-BPM result
+    has shape ``(bpms, nterms, 5)``, with unused rows filled with ``NaN``.
+    Each row contains ``[order, frequency, amplitude, real amplitude,
+    imaginary amplitude]``.
+
+    ``tol`` controls when a refined frequency is considered a duplicate of
+    one already found. Set ``warnings=False`` to suppress the DC warning.
+    """
+    values = np.asarray(data)
+    if values.ndim not in (1, 2):
+        raise ValueError(
+            "data must have shape (observations,) or (observations, bpms)"
+        )
+    if values.ndim == 2 and values.shape[1] == 0:
+        raise ValueError("data must contain at least one BPM")
+    if not np.issubdtype(values.dtype, np.number):
+        raise TypeError("data must contain numeric values")
+    if (
+        isinstance(turns, (bool, np.bool_))
+        or not isinstance(turns, (int, np.integer))
+        or turns < 6
+    ):
+        raise ValueError("turns must be an integer of at least 6")
+    if (
+        isinstance(nterms, (bool, np.bool_))
+        or not isinstance(nterms, (int, np.integer))
+        or nterms < 1
+    ):
+        raise ValueError("nterms must be a positive integer")
+    if (
+        isinstance(skipTurns, (bool, np.bool_))
+        or not isinstance(skipTurns, (int, np.integer))
+        or skipTurns < 0
+    ):
+        raise ValueError("skipTurns must be a non-negative integer")
+    if (
+        isinstance(window, (bool, np.bool_))
+        or not isinstance(window, (int, np.integer))
+        or window < 0
+    ):
+        raise ValueError("window must be a non-negative integer")
+    if (
+        isinstance(tol, (bool, np.bool_))
+        or
+        not isinstance(tol, (int, float, np.integer, np.floating))
+        or not np.isfinite(tol)
+        or tol <= 0
+        or tol > 1
+    ):
+        raise ValueError("tol must be a finite number in the interval (0, 1]")
+    if not isinstance(warnings, (bool, np.bool_)):
+        raise ValueError("warnings must be a boolean")
+    if not isinstance(getFullSpectrum, (bool, np.bool_)):
+        raise ValueError("getFullSpectrum must be a boolean")
+    if np.iscomplexobj(values) and not getFullSpectrum:
+        raise ValueError("getFullSpectrum must be True for complex input")
+
+    turns -= turns % 6
+    required_observations = skipTurns + turns + 1
+    if values.shape[0] < required_observations:
+        raise ValueError(
+            "data must contain at least skipTurns + turns + 1 observations"
+        )
+    analysis_values = values[:required_observations]
+    if not np.all(np.isfinite(analysis_values)):
+        raise ValueError("data must contain only finite values")
+
+    samples, taper, quadrature_weights = _prepare_context(turns, window)
+    if values.ndim == 1:
+        return _naff_1d(
+            values,
+            turns,
+            nterms,
+            skipTurns,
+            getFullSpectrum,
+            samples,
+            taper,
+            quadrature_weights,
+            float(tol),
+            bool(warnings),
+        )
+
+    result = np.full((values.shape[1], nterms, 5), np.nan)
+    for bpm in range(values.shape[1]):
+        bpm_result = _naff_1d(
+            values[:, bpm],
+            turns,
+            nterms,
+            skipTurns,
+            getFullSpectrum,
+            samples,
+            taper,
+            quadrature_weights,
+            float(tol),
+            bool(warnings),
+        )
+        result[bpm, : len(bpm_result)] = bpm_result
+    return result

@@ -1,2 +1,4 @@
-from .PyNAFF import *
-__version__ = '1.1.4'
+from .PyNAFF import naff
+from ._version import __version__
+
+__all__ = ["naff", "__version__"]
