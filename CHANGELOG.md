@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Add `optimizer="quadratic"` and `optimizer="brent"` frequency-refinement
+  options while preserving quadratic refinement as the default.
+- Add a dependency-free bounded Brent implementation with golden-section
+  fallback.
+
 ## 1.2.0
 
 - Accept multiple BPM signals as columns in an `(observations, bpms)` array.

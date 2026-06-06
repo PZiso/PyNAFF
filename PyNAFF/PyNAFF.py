@@ -42,7 +42,7 @@ def _integral(signal, frequency, samples, integration_weights):
     return abs(value), value.real, value.imag
 
 
-def _refine_frequency(
+def _refine_frequency_quadratic(
     signal,
     frequency,
     step,
@@ -110,6 +110,144 @@ def _refine_frequency(
             )
 
     return x2, y2, a2, b2
+
+
+def _refine_frequency_brent(
+    signal,
+    lower,
+    upper,
+    tolerance,
+    samples,
+    integration_weights,
+):
+    """Maximize the NAFF scalar product with bounded Brent optimization."""
+    golden_ratio = 0.5 * (3.0 - np.sqrt(5.0))
+    sqrt_epsilon = np.sqrt(np.finfo(np.float64).eps)
+    x = lower + golden_ratio * (upper - lower)
+    w = x
+    v = x
+    objective, _, _ = _integral(signal, x, samples, integration_weights)
+    fx = -objective
+    fw = fx
+    fv = fx
+    step = 0.0
+    previous_step = 0.0
+
+    for _ in range(500):
+        midpoint = 0.5 * (lower + upper)
+        tolerance1 = sqrt_epsilon * abs(x) + tolerance / 3.0
+        tolerance2 = 2.0 * tolerance1
+        if abs(x - midpoint) <= tolerance2 - 0.5 * (upper - lower):
+            break
+
+        if abs(previous_step) > tolerance1:
+            r = (x - w) * (fx - fv)
+            q = (x - v) * (fx - fw)
+            p = (x - v) * q - (x - w) * r
+            q = 2.0 * (q - r)
+            if q > 0.0:
+                p = -p
+            else:
+                q = -q
+
+            saved_step = previous_step
+            previous_step = step
+            if (
+                q != 0.0
+                and abs(p) < abs(0.5 * q * saved_step)
+                and p > q * (lower - x)
+                and p < q * (upper - x)
+            ):
+                step = p / q
+                candidate = x + step
+                if (
+                    candidate - lower < tolerance2
+                    or upper - candidate < tolerance2
+                ):
+                    step = (
+                        tolerance1 if x < midpoint else -tolerance1
+                    )
+            else:
+                previous_step = (
+                    upper - x if x < midpoint else lower - x
+                )
+                step = golden_ratio * previous_step
+        else:
+            previous_step = upper - x if x < midpoint else lower - x
+            step = golden_ratio * previous_step
+
+        if abs(step) >= tolerance1:
+            candidate = x + step
+        else:
+            candidate = x + (
+                tolerance1 if step > 0.0 else -tolerance1
+            )
+
+        candidate_objective, _, _ = _integral(
+            signal, candidate, samples, integration_weights
+        )
+        candidate_value = -candidate_objective
+        if candidate_value <= fx:
+            if candidate < x:
+                upper = x
+            else:
+                lower = x
+            v, fv = w, fw
+            w, fw = x, fx
+            x, fx = candidate, candidate_value
+        else:
+            if candidate < x:
+                lower = candidate
+            else:
+                upper = candidate
+            if candidate_value <= fw or w == x:
+                v, fv = w, fw
+                w, fw = candidate, candidate_value
+            elif candidate_value <= fv or v == x or v == w:
+                v, fv = candidate, candidate_value
+
+    value, real, imaginary = _integral(
+        signal, x, samples, integration_weights
+    )
+    return x, value, real, imaginary
+
+
+def _refine_frequency(
+    signal,
+    frequency,
+    resolution,
+    tolerance,
+    samples,
+    integration_weights,
+    optimizer,
+    get_full_spectrum,
+):
+    if optimizer == "quadratic":
+        return _refine_frequency_quadratic(
+            signal,
+            frequency,
+            resolution / 3.0,
+            tolerance,
+            samples,
+            integration_weights,
+        )
+
+    lower = frequency - resolution
+    upper = frequency + resolution
+    if get_full_spectrum:
+        lower = max(lower, -0.5)
+        upper = min(upper, 0.5)
+    else:
+        lower = max(lower, 0.0)
+        upper = min(upper, 0.5)
+    return _refine_frequency_brent(
+        signal,
+        lower,
+        upper,
+        tolerance,
+        samples,
+        integration_weights,
+    )
 
 
 def _frequency_status(
@@ -234,6 +372,7 @@ def _naff_1d(
     quadrature_weights,
     tolerance,
     show_warnings,
+    optimizer,
 ):
     residual = np.asarray(
         data[skip_turns : skip_turns + turns + 1],
@@ -272,10 +411,12 @@ def _naff_1d(
         frequency, _, real, imaginary = _refine_frequency(
             residual,
             frequency,
-            resolution / 3.0,
+            resolution,
             resolution / 1.0e8,
             samples,
             integration_weights,
+            optimizer,
+            get_full_spectrum,
         )
         status, existing_index = _frequency_status(
             frequency, frequencies, resolution, tolerance
@@ -339,6 +480,7 @@ def naff(
     window=1,
     tol=1.0e-4,
     warnings=True,
+    optimizer="quadratic",
 ):
     """Extract the fundamental frequencies of one or more BPM signals.
 
@@ -352,6 +494,10 @@ def naff(
 
     ``tol`` controls when a refined frequency is considered a duplicate of
     one already found. Set ``warnings=False`` to suppress the DC warning.
+
+    ``optimizer="quadratic"`` preserves the fast legacy three-point
+    interpolation. ``optimizer="brent"`` uses a bounded parabolic search with
+    golden-section fallback, making it more conservative near non-ideal peaks.
     """
     values = np.asarray(data)
     if values.ndim not in (1, 2):
@@ -399,6 +545,11 @@ def naff(
         raise ValueError("warnings must be a boolean")
     if not isinstance(getFullSpectrum, (bool, np.bool_)):
         raise ValueError("getFullSpectrum must be a boolean")
+    if not isinstance(optimizer, str) or optimizer not in (
+        "quadratic",
+        "brent",
+    ):
+        raise ValueError("optimizer must be 'quadratic' or 'brent'")
     if np.iscomplexobj(values) and not getFullSpectrum:
         raise ValueError("getFullSpectrum must be True for complex input")
 
@@ -425,6 +576,7 @@ def naff(
             quadrature_weights,
             float(tol),
             bool(warnings),
+            optimizer,
         )
 
     result = np.full((values.shape[1], nterms, 5), np.nan)
@@ -440,6 +592,7 @@ def naff(
             quadrature_weights,
             float(tol),
             bool(warnings),
+            optimizer,
         )
         result[bpm, : len(bpm_result)] = bpm_result
     return result
