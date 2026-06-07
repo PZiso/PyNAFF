@@ -1,4 +1,7 @@
 import unittest
+import subprocess
+import sys
+from pathlib import Path
 
 import numpy as np
 
@@ -96,6 +99,26 @@ class OptimizerTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "optimizer"):
             pnf.naff(signal, optimizer="newton")
+
+    def test_import_from_package_directory_used_by_debug_notebook(self):
+        package_directory = Path(__file__).parents[1] / "PyNAFF"
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "from PyNAFF import naff; "
+                    "assert callable(naff); "
+                    "print(naff.__module__)"
+                ),
+            ],
+            cwd=package_directory,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(completed.stdout.strip(), "PyNAFF")
 
 
 if __name__ == "__main__":

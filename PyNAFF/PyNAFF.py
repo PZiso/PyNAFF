@@ -5,7 +5,10 @@ import warnings as warnings_module
 
 import numpy as np
 
-from ._version import __version__
+if __package__:
+    from ._version import __version__
+else:
+    from _version import __version__
 
 __PyVersion = [3]
 __authors__ = ["F. Asvesta", "N. Karastathis", "P. Zisopoulos"]
