@@ -115,6 +115,18 @@ class NaffTests(unittest.TestCase):
         )
         self.assertAlmostEqual(result[0, 1], 0.2, places=6)
 
+    def test_legacy_large_duplicate_tolerance_is_accepted(self):
+        signal = np.sin(2.0 * np.pi * 0.2 * self.samples)
+
+        result = pnf.naff(
+            signal,
+            turns=self.turns,
+            tol=10000,
+            warnings=False,
+        )
+
+        self.assertAlmostEqual(result[0, 1], 0.2, places=6)
+
     def test_invalid_boolean_options_are_rejected(self):
         signal = np.sin(2.0 * np.pi * 0.2 * self.samples)
         with self.assertRaisesRegex(ValueError, "getFullSpectrum"):

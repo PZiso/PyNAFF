@@ -257,7 +257,7 @@ def _frequency_status(
     frequency,
     frequencies,
     fundamental_resolution,
-    tolerance,
+    duplicate_tolerance,
 ):
     if not frequencies:
         return 1, 0
@@ -268,7 +268,9 @@ def _frequency_status(
         return 1, 0
 
     duplicate = nearby[
-        distances[nearby] / abs(fundamental_resolution) < tolerance
+        distances[nearby]
+        / abs(fundamental_resolution)
+        < duplicate_tolerance
     ]
     if duplicate.size:
         return -1, int(duplicate[0])
@@ -373,7 +375,7 @@ def _naff_1d(
     samples,
     taper,
     quadrature_weights,
-    tolerance,
+    duplicate_tolerance,
     show_warnings,
     optimizer,
 ):
@@ -422,7 +424,10 @@ def _naff_1d(
             get_full_spectrum,
         )
         status, existing_index = _frequency_status(
-            frequency, frequencies, resolution, tolerance
+            frequency,
+            frequencies,
+            resolution,
+            duplicate_tolerance,
         )
 
         if status == 0:
@@ -495,8 +500,12 @@ def naff(
     Each row contains ``[order, frequency, amplitude, real amplitude,
     imaginary amplitude]``.
 
-    ``tol`` controls when a refined frequency is considered a duplicate of
-    one already found. Set ``warnings=False`` to suppress the DC warning.
+    ``tol`` is the duplicate-frequency threshold used by the ``fretes`` step,
+    expressed as a fraction of one FFT bin. It does not control optimizer
+    convergence. Values greater than or equal to one classify every candidate
+    already within one FFT bin as a duplicate, allowing residual removal to
+    continue before weaker nearby harmonics are sought. Set ``warnings=False``
+    to suppress diagnostic warnings.
 
     ``optimizer="quadratic"`` preserves the fast legacy three-point
     interpolation. ``optimizer="brent"`` uses a bounded parabolic search with
@@ -541,9 +550,8 @@ def naff(
         not isinstance(tol, (int, float, np.integer, np.floating))
         or not np.isfinite(tol)
         or tol <= 0
-        or tol > 1
     ):
-        raise ValueError("tol must be a finite number in the interval (0, 1]")
+        raise ValueError("tol must be a positive finite number")
     if not isinstance(warnings, (bool, np.bool_)):
         raise ValueError("warnings must be a boolean")
     if not isinstance(getFullSpectrum, (bool, np.bool_)):

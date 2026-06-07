@@ -63,8 +63,10 @@ FFT bin. If NAFF stops early because a residual peak is very close to a
 previously extracted frequency, increasing ``tol`` can let it remove that
 residual and continue to weaker frequencies. The default is ``1e-4``; large
 values can also turn spectral leakage into spurious frequencies, so compare
-results across several values. ``nterms`` is an upper bound, not a guaranteed
-result count.
+results across several values. ``tol`` does not control optimizer convergence.
+Because duplicate testing is applied only within one FFT bin, every value
+``tol >= 1`` has the same classification effect, including legacy choices such
+as ``tol=10000``. ``nterms`` is an upper bound, not a guaranteed result count.
 
 For real input, prefer ``getFullSpectrum=False``. A full spectrum contains both
 positive and negative conjugate frequencies, and each one occupies a result
