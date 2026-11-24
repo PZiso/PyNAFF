@@ -6,6 +6,16 @@
   options while preserving quadratic refinement as the default.
 - Add a dependency-free bounded Brent implementation with golden-section
   fallback.
+- Add `close_terms="add"`: a residual peak within one FFT bin of an extracted
+  frequency is subtracted and reported as an additional term instead of
+  stopping the extraction. This keeps the residual of a decohering line out of
+  weak nearby lines such as synchrotron sidebands. The default `"stop"`
+  preserves the previous behavior.
+- Add `normalize_envelope(data, period, band=None)`, which divides a signal by
+  its envelope averaged over `period` samples, to remove slow amplitude decay
+  before the analysis.
+- Add known-answer tests and `examples/decohering_sidebands.py` for weak
+  sidebands next to a decohering betatron line.
 
 ## 1.2.0
 

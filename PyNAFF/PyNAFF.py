@@ -13,7 +13,7 @@ else:
 __PyVersion = [3]
 __authors__ = ["F. Asvesta", "N. Karastathis", "P. Zisopoulos"]
 __contact__ = ["nkarast .at. cern .dot. ch"]
-__all__ = ["naff"]
+__all__ = ["naff", "normalize_envelope"]
 
 
 def _hardy_weights(turns):
@@ -378,6 +378,7 @@ def _naff_1d(
     duplicate_tolerance,
     show_warnings,
     optimizer,
+    close_terms,
 ):
     residual = np.asarray(
         data[skip_turns : skip_turns + turns + 1],
@@ -386,6 +387,7 @@ def _naff_1d(
     integration_weights = taper * quadrature_weights
     frequencies = []
     amplitudes = np.zeros(nterms, dtype=np.complex128)
+    close_found = []
     coefficients = np.zeros((nterms, nterms), dtype=np.complex128)
     resolution = 1.0 / turns
     real_spectrum = not get_full_spectrum
@@ -430,6 +432,20 @@ def _naff_1d(
             duplicate_tolerance,
         )
 
+        if status == 0 and close_terms == "add":
+            # Cleaning term: subtract its own projection, keep it out of the
+            # orthonormal basis, so that the near-degenerate exponentials do
+            # not make the basis coefficients ill-conditioned.
+            contribution = complex(real, imaginary)
+            _remove_component(
+                residual,
+                contribution,
+                frequency,
+                samples,
+                real_spectrum,
+            )
+            close_found.append((frequency, contribution))
+            continue
         if status == 0:
             if show_warnings:
                 warnings_module.warn(
@@ -476,6 +492,21 @@ def _naff_1d(
             amplitude.real,
             amplitude.imag,
         )
+    if close_found:
+        extra = np.array(
+            [
+                (
+                    len(frequencies) + order,
+                    frequency,
+                    abs(amplitude),
+                    amplitude.real,
+                    amplitude.imag,
+                )
+                for order, (frequency, amplitude) in enumerate(close_found)
+            ],
+            dtype=np.float64,
+        )
+        result = np.vstack([result, extra])
     return result
 
 
@@ -489,6 +520,7 @@ def naff(
     tol=1.0e-4,
     warnings=True,
     optimizer="quadratic",
+    close_terms="stop",
 ):
     """Extract the fundamental frequencies of one or more BPM signals.
 
@@ -510,6 +542,18 @@ def naff(
     ``optimizer="quadratic"`` preserves the fast legacy three-point
     interpolation. ``optimizer="brent"`` uses a bounded parabolic search with
     golden-section fallback, making it more conservative near non-ideal peaks.
+
+    ``close_terms`` sets what happens when a residual peak lies within one FFT
+    bin of an extracted frequency but outside ``tol``. ``"stop"`` (default)
+    ends the extraction, as before. ``"add"`` subtracts the peak's projection
+    from the residual and reports it as an additional term, after the regular
+    terms, without adding it to the orthonormal basis of NAFF (the nearly
+    degenerate exponentials would make the basis coefficients ill-conditioned).
+    A line whose amplitude or frequency changes within the record, e.g. a
+    decohering betatron line, leaves such a residual next to it. Absorbing it
+    with nearby terms keeps its leakage out of weaker lines further away,
+    such as synchrotron sidebands. The extra terms describe the non-stationary
+    line and are not separate physical frequencies.
     """
     values = np.asarray(data)
     if values.ndim not in (1, 2):
@@ -561,6 +605,8 @@ def naff(
         "brent",
     ):
         raise ValueError("optimizer must be 'quadratic' or 'brent'")
+    if not isinstance(close_terms, str) or close_terms not in ("stop", "add"):
+        raise ValueError("close_terms must be 'stop' or 'add'")
     if np.iscomplexobj(values) and not getFullSpectrum:
         raise ValueError("getFullSpectrum must be True for complex input")
 
@@ -588,6 +634,7 @@ def naff(
             float(tol),
             bool(warnings),
             optimizer,
+            close_terms,
         )
 
     result = np.full((values.shape[1], nterms, 5), np.nan)
@@ -604,6 +651,78 @@ def naff(
             float(tol),
             bool(warnings),
             optimizer,
+            close_terms,
         )
         result[bpm, : len(bpm_result)] = bpm_result
     return result
+
+
+def _moving_average(values, length):
+    padded = np.pad(values, length, mode="edge")
+    kernel = np.ones(length) / length
+    return np.convolve(padded, kernel, mode="same")[length:-length]
+
+
+def normalize_envelope(data, period, band=None):
+    """Divide a real signal by its slowly varying envelope.
+
+    The envelope is the modulus of the analytic signal, averaged over
+    ``period`` samples. For a betatron signal with chromatic sidebands,
+    ``period`` should be one synchrotron period, ``round(1 / Q_s)`` turns. The
+    average then removes the modulation at the synchrotron tune, which carries
+    the sidebands, and keeps only the slower decay, e.g. from amplitude
+    detuning. Dividing by it gives a nearly stationary signal for ``naff``.
+
+    ``band=(low, high)`` restricts the analytic signal to frequencies in
+    ``[low, high]`` (in units of the sampling frequency), e.g. around the
+    betatron tune, so that other lines do not enter the envelope.
+
+    The data have shape ``(observations,)`` or ``(observations, bpms)``, and
+    the mean of each signal is removed. Absolute amplitudes of the result are
+    relative to the envelope; ratios between lines close in frequency are
+    preserved as long as the envelope varies slowly over ``period``.
+    """
+    values = np.asarray(data, dtype=np.float64)
+    if values.ndim not in (1, 2):
+        raise ValueError(
+            "data must have shape (observations,) or (observations, bpms)"
+        )
+    if (
+        isinstance(period, (bool, np.bool_))
+        or not isinstance(period, (int, np.integer))
+        or period < 1
+        or period >= values.shape[0]
+    ):
+        raise ValueError(
+            "period must be a positive integer shorter than the signal"
+        )
+    if not np.all(np.isfinite(values)):
+        raise ValueError("data must contain only finite values")
+    if band is not None:
+        low, high = band
+        if not 0.0 <= low < high <= 0.5:
+            raise ValueError("band must satisfy 0 <= low < high <= 0.5")
+
+    single = values.ndim == 1
+    columns = values[:, None] if single else values
+    centered = columns - columns.mean(axis=0)
+    count = centered.shape[0]
+    spectrum = np.fft.fft(centered, axis=0)
+    frequencies = np.fft.fftfreq(count)
+    gain = np.where(frequencies > 0.0, 2.0, 0.0)
+    gain[0] = 1.0
+    if count % 2 == 0:
+        gain[count // 2] = 1.0
+    if band is not None:
+        gain[(np.abs(frequencies) < low) | (np.abs(frequencies) > high)] = 0.0
+    envelope = np.abs(np.fft.ifft(spectrum * gain[:, None], axis=0))
+    smooth = np.column_stack(
+        [
+            _moving_average(envelope[:, column], int(period))
+            for column in range(envelope.shape[1])
+        ]
+    )
+    if np.any(smooth <= 0.0):
+        raise ValueError("the envelope vanishes; check period and band")
+    result = centered / smooth
+    return result[:, 0] if single else result

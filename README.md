@@ -68,6 +68,33 @@ For real input, prefer `getFullSpectrum=False`. A full spectrum contains both
 positive and negative conjugate frequencies, and each one occupies a result
 row.
 
+## Decohering signals
+
+NAFF assumes a sum of lines with constant amplitudes. A line whose amplitude
+or frequency changes within the record, for example the betatron line of a
+kicked beam that decoheres through amplitude detuning, leaves a residual within
+one FFT bin of it after subtraction. By default PyNAFF stops there, and with
+`tol >= 1` it merges the residual into the main line. In both cases the
+residual's leakage biases weaker lines nearby, such as synchrotron sidebands.
+
+Two options address this:
+
+```python
+# Absorb the residual of a non-stationary line with additional cleaning terms.
+# They are reported after the regular terms and are not physical frequencies.
+result = pnf.naff(signal, turns=500, nterms=30, close_terms="add")
+
+# Or divide out the slow decay first. With period = one synchrotron period,
+# the modulation at Q_s (which carries the sidebands) is kept.
+normalized = pnf.normalize_envelope(signal, period=62, band=(0.15, 0.25))
+result = pnf.naff(normalized, turns=500, nterms=30)
+```
+
+`examples/decohering_sidebands.py` compares the options on a signal with a
+known answer (sidebands at 1 % of a decohering main line). For records of six
+synchrotron periods or more, `close_terms="add"` recovers the sideband ratio to
+within 0.5 %; `normalize_envelope` is the better choice for short records.
+
 ## Frequency optimizer
 
 The FFT peak can be refined with either optimizer:
