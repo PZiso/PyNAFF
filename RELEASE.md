@@ -4,6 +4,18 @@ Releases are published automatically when a version tag is pushed.
 
 ## One-time PyPI setup
 
+The upload uses the project-scoped API token stored as the secret
+`PYPI_API_TOKEN` in the GitHub environment `pypi`:
+
+```bash
+gh secret set PYPI_API_TOKEN --env pypi --repo PZiso/PyNAFF
+```
+
+Alternatively, a PyPI owner of the project can configure Trusted Publishing
+(below) and the secret can be deleted; the workflow then uses it automatically.
+
+### Trusted Publishing (optional)
+
 In the PyPI PyNAFF project, add a Trusted Publisher with:
 
 - Owner: `PZiso`
