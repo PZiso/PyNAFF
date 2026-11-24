@@ -5,12 +5,15 @@ import warnings as warnings_module
 
 import numpy as np
 
-from ._version import __version__
+if __package__:
+    from ._version import __version__
+else:
+    from _version import __version__
 
 __PyVersion = [3]
 __authors__ = ["F. Asvesta", "N. Karastathis", "P. Zisopoulos"]
 __contact__ = ["nkarast .at. cern .dot. ch"]
-__all__ = ["naff"]
+__all__ = ["naff", "normalize_envelope"]
 
 
 def _hardy_weights(turns):
@@ -42,7 +45,7 @@ def _integral(signal, frequency, samples, integration_weights):
     return abs(value), value.real, value.imag
 
 
-def _refine_frequency(
+def _refine_frequency_quadratic(
     signal,
     frequency,
     step,
@@ -112,11 +115,149 @@ def _refine_frequency(
     return x2, y2, a2, b2
 
 
+def _refine_frequency_brent(
+    signal,
+    lower,
+    upper,
+    tolerance,
+    samples,
+    integration_weights,
+):
+    """Maximize the NAFF scalar product with bounded Brent optimization."""
+    golden_ratio = 0.5 * (3.0 - np.sqrt(5.0))
+    sqrt_epsilon = np.sqrt(np.finfo(np.float64).eps)
+    x = lower + golden_ratio * (upper - lower)
+    w = x
+    v = x
+    objective, _, _ = _integral(signal, x, samples, integration_weights)
+    fx = -objective
+    fw = fx
+    fv = fx
+    step = 0.0
+    previous_step = 0.0
+
+    for _ in range(500):
+        midpoint = 0.5 * (lower + upper)
+        tolerance1 = sqrt_epsilon * abs(x) + tolerance / 3.0
+        tolerance2 = 2.0 * tolerance1
+        if abs(x - midpoint) <= tolerance2 - 0.5 * (upper - lower):
+            break
+
+        if abs(previous_step) > tolerance1:
+            r = (x - w) * (fx - fv)
+            q = (x - v) * (fx - fw)
+            p = (x - v) * q - (x - w) * r
+            q = 2.0 * (q - r)
+            if q > 0.0:
+                p = -p
+            else:
+                q = -q
+
+            saved_step = previous_step
+            previous_step = step
+            if (
+                q != 0.0
+                and abs(p) < abs(0.5 * q * saved_step)
+                and p > q * (lower - x)
+                and p < q * (upper - x)
+            ):
+                step = p / q
+                candidate = x + step
+                if (
+                    candidate - lower < tolerance2
+                    or upper - candidate < tolerance2
+                ):
+                    step = (
+                        tolerance1 if x < midpoint else -tolerance1
+                    )
+            else:
+                previous_step = (
+                    upper - x if x < midpoint else lower - x
+                )
+                step = golden_ratio * previous_step
+        else:
+            previous_step = upper - x if x < midpoint else lower - x
+            step = golden_ratio * previous_step
+
+        if abs(step) >= tolerance1:
+            candidate = x + step
+        else:
+            candidate = x + (
+                tolerance1 if step > 0.0 else -tolerance1
+            )
+
+        candidate_objective, _, _ = _integral(
+            signal, candidate, samples, integration_weights
+        )
+        candidate_value = -candidate_objective
+        if candidate_value <= fx:
+            if candidate < x:
+                upper = x
+            else:
+                lower = x
+            v, fv = w, fw
+            w, fw = x, fx
+            x, fx = candidate, candidate_value
+        else:
+            if candidate < x:
+                lower = candidate
+            else:
+                upper = candidate
+            if candidate_value <= fw or w == x:
+                v, fv = w, fw
+                w, fw = candidate, candidate_value
+            elif candidate_value <= fv or v == x or v == w:
+                v, fv = candidate, candidate_value
+
+    value, real, imaginary = _integral(
+        signal, x, samples, integration_weights
+    )
+    return x, value, real, imaginary
+
+
+def _refine_frequency(
+    signal,
+    frequency,
+    resolution,
+    tolerance,
+    samples,
+    integration_weights,
+    optimizer,
+    get_full_spectrum,
+):
+    if optimizer == "quadratic":
+        return _refine_frequency_quadratic(
+            signal,
+            frequency,
+            resolution / 3.0,
+            tolerance,
+            samples,
+            integration_weights,
+        )
+
+    lower = frequency - resolution
+    upper = frequency + resolution
+    if get_full_spectrum:
+        lower = max(lower, -0.5)
+        upper = min(upper, 0.5)
+    else:
+        lower = max(lower, 0.0)
+        upper = min(upper, 0.5)
+    return _refine_frequency_brent(
+        signal,
+        lower,
+        upper,
+        tolerance,
+        samples,
+        integration_weights,
+    )
+
+
 def _frequency_status(
     frequency,
     frequencies,
     fundamental_resolution,
-    tolerance,
+    duplicate_tolerance,
 ):
     if not frequencies:
         return 1, 0
@@ -127,7 +268,9 @@ def _frequency_status(
         return 1, 0
 
     duplicate = nearby[
-        distances[nearby] / abs(fundamental_resolution) < tolerance
+        distances[nearby]
+        / abs(fundamental_resolution)
+        < duplicate_tolerance
     ]
     if duplicate.size:
         return -1, int(duplicate[0])
@@ -232,8 +375,10 @@ def _naff_1d(
     samples,
     taper,
     quadrature_weights,
-    tolerance,
+    duplicate_tolerance,
     show_warnings,
+    optimizer,
+    close_terms,
 ):
     residual = np.asarray(
         data[skip_turns : skip_turns + turns + 1],
@@ -242,6 +387,7 @@ def _naff_1d(
     integration_weights = taper * quadrature_weights
     frequencies = []
     amplitudes = np.zeros(nterms, dtype=np.complex128)
+    close_found = []
     coefficients = np.zeros((nterms, nterms), dtype=np.complex128)
     resolution = 1.0 / turns
     real_spectrum = not get_full_spectrum
@@ -272,15 +418,34 @@ def _naff_1d(
         frequency, _, real, imaginary = _refine_frequency(
             residual,
             frequency,
-            resolution / 3.0,
+            resolution,
             resolution / 1.0e8,
             samples,
             integration_weights,
+            optimizer,
+            get_full_spectrum,
         )
         status, existing_index = _frequency_status(
-            frequency, frequencies, resolution, tolerance
+            frequency,
+            frequencies,
+            resolution,
+            duplicate_tolerance,
         )
 
+        if status == 0 and close_terms == "add":
+            # Cleaning term: subtract its own projection, keep it out of the
+            # orthonormal basis, so that the near-degenerate exponentials do
+            # not make the basis coefficients ill-conditioned.
+            contribution = complex(real, imaginary)
+            _remove_component(
+                residual,
+                contribution,
+                frequency,
+                samples,
+                real_spectrum,
+            )
+            close_found.append((frequency, contribution))
+            continue
         if status == 0:
             if show_warnings:
                 warnings_module.warn(
@@ -327,6 +492,21 @@ def _naff_1d(
             amplitude.real,
             amplitude.imag,
         )
+    if close_found:
+        extra = np.array(
+            [
+                (
+                    len(frequencies) + order,
+                    frequency,
+                    abs(amplitude),
+                    amplitude.real,
+                    amplitude.imag,
+                )
+                for order, (frequency, amplitude) in enumerate(close_found)
+            ],
+            dtype=np.float64,
+        )
+        result = np.vstack([result, extra])
     return result
 
 
@@ -339,6 +519,8 @@ def naff(
     window=1,
     tol=1.0e-4,
     warnings=True,
+    optimizer="quadratic",
+    close_terms="stop",
 ):
     """Extract the fundamental frequencies of one or more BPM signals.
 
@@ -350,8 +532,28 @@ def naff(
     Each row contains ``[order, frequency, amplitude, real amplitude,
     imaginary amplitude]``.
 
-    ``tol`` controls when a refined frequency is considered a duplicate of
-    one already found. Set ``warnings=False`` to suppress the DC warning.
+    ``tol`` is the duplicate-frequency threshold used by the ``fretes`` step,
+    expressed as a fraction of one FFT bin. It does not control optimizer
+    convergence. Values greater than or equal to one classify every candidate
+    already within one FFT bin as a duplicate, allowing residual removal to
+    continue before weaker nearby harmonics are sought. Set ``warnings=False``
+    to suppress diagnostic warnings.
+
+    ``optimizer="quadratic"`` preserves the fast legacy three-point
+    interpolation. ``optimizer="brent"`` uses a bounded parabolic search with
+    golden-section fallback, making it more conservative near non-ideal peaks.
+
+    ``close_terms`` sets what happens when a residual peak lies within one FFT
+    bin of an extracted frequency but outside ``tol``. ``"stop"`` (default)
+    ends the extraction, as before. ``"add"`` subtracts the peak's projection
+    from the residual and reports it as an additional term, after the regular
+    terms, without adding it to the orthonormal basis of NAFF (the nearly
+    degenerate exponentials would make the basis coefficients ill-conditioned).
+    A line whose amplitude or frequency changes within the record, e.g. a
+    decohering betatron line, leaves such a residual next to it. Absorbing it
+    with nearby terms keeps its leakage out of weaker lines further away,
+    such as synchrotron sidebands. The extra terms describe the non-stationary
+    line and are not separate physical frequencies.
     """
     values = np.asarray(data)
     if values.ndim not in (1, 2):
@@ -392,13 +594,19 @@ def naff(
         not isinstance(tol, (int, float, np.integer, np.floating))
         or not np.isfinite(tol)
         or tol <= 0
-        or tol > 1
     ):
-        raise ValueError("tol must be a finite number in the interval (0, 1]")
+        raise ValueError("tol must be a positive finite number")
     if not isinstance(warnings, (bool, np.bool_)):
         raise ValueError("warnings must be a boolean")
     if not isinstance(getFullSpectrum, (bool, np.bool_)):
         raise ValueError("getFullSpectrum must be a boolean")
+    if not isinstance(optimizer, str) or optimizer not in (
+        "quadratic",
+        "brent",
+    ):
+        raise ValueError("optimizer must be 'quadratic' or 'brent'")
+    if not isinstance(close_terms, str) or close_terms not in ("stop", "add"):
+        raise ValueError("close_terms must be 'stop' or 'add'")
     if np.iscomplexobj(values) and not getFullSpectrum:
         raise ValueError("getFullSpectrum must be True for complex input")
 
@@ -425,6 +633,8 @@ def naff(
             quadrature_weights,
             float(tol),
             bool(warnings),
+            optimizer,
+            close_terms,
         )
 
     result = np.full((values.shape[1], nterms, 5), np.nan)
@@ -440,6 +650,79 @@ def naff(
             quadrature_weights,
             float(tol),
             bool(warnings),
+            optimizer,
+            close_terms,
         )
         result[bpm, : len(bpm_result)] = bpm_result
     return result
+
+
+def _moving_average(values, length):
+    padded = np.pad(values, length, mode="edge")
+    kernel = np.ones(length) / length
+    return np.convolve(padded, kernel, mode="same")[length:-length]
+
+
+def normalize_envelope(data, period, band=None):
+    """Divide a real signal by its slowly varying envelope.
+
+    The envelope is the modulus of the analytic signal, averaged over
+    ``period`` samples. For a betatron signal with chromatic sidebands,
+    ``period`` should be one synchrotron period, ``round(1 / Q_s)`` turns. The
+    average then removes the modulation at the synchrotron tune, which carries
+    the sidebands, and keeps only the slower decay, e.g. from amplitude
+    detuning. Dividing by it gives a nearly stationary signal for ``naff``.
+
+    ``band=(low, high)`` restricts the analytic signal to frequencies in
+    ``[low, high]`` (in units of the sampling frequency), e.g. around the
+    betatron tune, so that other lines do not enter the envelope.
+
+    The data have shape ``(observations,)`` or ``(observations, bpms)``, and
+    the mean of each signal is removed. Absolute amplitudes of the result are
+    relative to the envelope; ratios between lines close in frequency are
+    preserved as long as the envelope varies slowly over ``period``.
+    """
+    values = np.asarray(data, dtype=np.float64)
+    if values.ndim not in (1, 2):
+        raise ValueError(
+            "data must have shape (observations,) or (observations, bpms)"
+        )
+    if (
+        isinstance(period, (bool, np.bool_))
+        or not isinstance(period, (int, np.integer))
+        or period < 1
+        or period >= values.shape[0]
+    ):
+        raise ValueError(
+            "period must be a positive integer shorter than the signal"
+        )
+    if not np.all(np.isfinite(values)):
+        raise ValueError("data must contain only finite values")
+    if band is not None:
+        low, high = band
+        if not 0.0 <= low < high <= 0.5:
+            raise ValueError("band must satisfy 0 <= low < high <= 0.5")
+
+    single = values.ndim == 1
+    columns = values[:, None] if single else values
+    centered = columns - columns.mean(axis=0)
+    count = centered.shape[0]
+    spectrum = np.fft.fft(centered, axis=0)
+    frequencies = np.fft.fftfreq(count)
+    gain = np.where(frequencies > 0.0, 2.0, 0.0)
+    gain[0] = 1.0
+    if count % 2 == 0:
+        gain[count // 2] = 1.0
+    if band is not None:
+        gain[(np.abs(frequencies) < low) | (np.abs(frequencies) > high)] = 0.0
+    envelope = np.abs(np.fft.ifft(spectrum * gain[:, None], axis=0))
+    smooth = np.column_stack(
+        [
+            _moving_average(envelope[:, column], int(period))
+            for column in range(envelope.shape[1])
+        ]
+    )
+    if np.any(smooth <= 0.0):
+        raise ValueError("the envelope vanishes; check period and band")
+    result = centered / smooth
+    return result[:, 0] if single else result

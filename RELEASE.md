@@ -1,6 +1,6 @@
 # Release Process
 
-PyPI currently has PyNAFF 1.1.7. This repository prepares version 1.2.0.
+Releases are published automatically when a version tag is pushed.
 
 ## One-time PyPI setup
 
@@ -15,29 +15,32 @@ In GitHub, create the `pypi` environment under repository settings.
 
 ## Release
 
-Run the tests and build checks:
+1. Merge the feature branches into `master` through pull requests, after the
+   `Tests` workflow passes.
+2. On `master`, set the new version in `PyNAFF/_version.py` and rename the
+   `## Unreleased` section of `CHANGELOG.md` to `## <version>`. Commit and push.
+3. Tag and push:
+
+   ```bash
+   git switch master
+   git pull --ff-only origin master
+   git tag -a v1.3.0 -m "PyNAFF 1.3.0"
+   git push origin v1.3.0
+   ```
+
+Pushing the tag starts `publish.yml`. It checks that the tag matches
+`PyNAFF/_version.py` and that `CHANGELOG.md` has a section for the version,
+runs the tests, uploads to PyPI, and then creates the GitHub release with the
+notes of that version. If the upload fails, no release is created; fix the
+cause and re-run the failed jobs from the Actions tab.
+
+The workflow can also be started by hand from the Actions tab
+(`Run workflow`). On a branch it uploads without creating a GitHub release.
+
+## Local checks (optional)
 
 ```bash
 python -m unittest discover -s tests -v
 python -m build
 python -m twine check dist/*
 ```
-
-Push the feature branch and merge it into `master` after CI passes:
-
-```bash
-git push -u origin feature/multi-bpm
-```
-
-After merging:
-
-```bash
-git switch master
-git pull --ff-only origin master
-git tag -a v1.2.0 -m "PyNAFF 1.2.0"
-git push origin v1.2.0
-```
-
-After a PyPI owner configures Trusted Publishing, run the
-`Publish to PyPI with Trusted Publishing` workflow manually. Create the GitHub
-release only after the PyPI upload succeeds.

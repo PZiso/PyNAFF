@@ -7,8 +7,10 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # Python 3.9 is not available on ubuntu-latest (26.04) any more.
+    runs-on: ubuntu-24.04
     strategy:
+      fail-fast: false
       matrix:
         python-version: ["3.9", "3.11", "3.13"]
 

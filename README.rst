@@ -63,9 +63,27 @@ FFT bin. If NAFF stops early because a residual peak is very close to a
 previously extracted frequency, increasing ``tol`` can let it remove that
 residual and continue to weaker frequencies. The default is ``1e-4``; large
 values can also turn spectral leakage into spurious frequencies, so compare
-results across several values. ``nterms`` is an upper bound, not a guaranteed
-result count.
+results across several values. ``tol`` does not control optimizer convergence.
+Because duplicate testing is applied only within one FFT bin, every value
+``tol >= 1`` has the same classification effect, including legacy choices such
+as ``tol=10000``. ``nterms`` is an upper bound, not a guaranteed result count.
 
 For real input, prefer ``getFullSpectrum=False``. A full spectrum contains both
 positive and negative conjugate frequencies, and each one occupies a result
 row.
+
+Frequency optimizer
+-------------------
+
+The FFT peak can be refined with either optimizer:
+
+.. code:: python
+
+   fast = pnf.naff(signals, turns=500, optimizer="quadratic")
+   bounded = pnf.naff(signals, turns=500, optimizer="brent")
+
+``quadratic`` is the backward-compatible default and repeatedly fits three
+nearby objective values. ``brent`` keeps the search inside the neighboring FFT
+bin and falls back to golden-section steps when parabolic interpolation is
+unreliable. Brent can be more robust for distorted peaks, while either method
+can be preferable for a particular signal and window.
