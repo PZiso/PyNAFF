@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.3.0
 
 - Add `optimizer="quadratic"` and `optimizer="brent"` frequency-refinement
   options while preserving quadratic refinement as the default.
