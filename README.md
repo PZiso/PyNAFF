@@ -7,7 +7,23 @@ Authors:
 * Panagiotis Zisopoulos (pzisopou .at. cern .dot. ch)
 
 A Python implementation of J. Laskar's Numerical Analysis of Fundamental
-Frequencies (NAFF) method.
+Frequencies (NAFF) method, for one or more signals, e.g. turn-by-turn data
+from many beam position monitors.
+
+Features:
+
+* Frequencies and complex amplitudes of the strongest lines of a signal.
+* Several BPM signals at once, as the columns of a two-dimensional array.
+* Windowed analysis (`window`) and two frequency optimizers
+  (`"quadratic"`, `"brent"`).
+* Decohering signals, whose amplitude or frequency changes within the record:
+  extra cleaning terms (`close_terms="add"`) and envelope normalization
+  (`normalize_envelope`), e.g. for weak synchrotron sidebands next to a
+  decohering betatron line.
+* Only NumPy is required.
+
+New in 1.3.0: `optimizer="brent"`, `close_terms="add"`, `normalize_envelope`,
+and automatic releases from version tags. See `CHANGELOG.md`.
 
 ## Installation
 
